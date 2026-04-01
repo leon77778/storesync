@@ -218,9 +218,140 @@ total is derived, not stored.
 
 ---
 
+---
+
+## Step 11 — ImportController
+
+**File:** `app/Http/Controllers/ImportController.php`
+
+**What it does:**
+Handles two things: showing the upload form (`create`) and processing the
+submitted CSV (`store`).
+
+**How `store()` works step by step:**
+1. **Validate** — Laravel checks the file exists, is a CSV/txt, and is under 2MB.
+   If not, it redirects back with error messages automatically.
+2. **Store the file** — saves it to `storage/app/imports/` so we can read it.
+3. **Open and parse the CSV** — `fgetcsv()` reads one line at a time. The first
+   line (header row) is discarded. Every other line becomes a `$row` array.
+4. **Create ImportBatch** — one record for the whole upload, now that we know
+   how many rows there are.
+5. **Loop through rows** — for each row, create an `Order` record (status = pending,
+   totals = 0) and immediately dispatch `ProcessOrderJob`. The jobs go into the
+   queue — they don't run during this request.
+6. **Redirect to dashboard** with a success message.
+
+**Line item format in the CSV:**
+Items are encoded as `Name:qty:unit_price` in each column from index 3 onward.
+Example: `Blue Widget:2:9.99`. The controller splits on `:` to build the array.
+
+---
+
+## Step 12 — DashboardController
+
+**File:** `app/Http/Controllers/DashboardController.php`
+
+**What it does:**
+Two methods: the page (`index`) and the polling endpoint (`batchStatus`).
+
+**`index()`** — loads all ImportBatches, newest first, 10 per page. The
+`with('orders')` part is important: it eager-loads all orders for each batch
+in one extra SQL query, instead of running a separate query for each batch
+as it renders. This is called avoiding the "N+1 problem".
+
+**`batchStatus()`** — returns JSON for one batch. The frontend JavaScript
+calls this every 4 seconds. It returns only what's needed: batch counters and
+per-order status/total. Laravel's route model binding automatically fetches
+the `ImportBatch` from the `{batch}` URL parameter.
+
+---
+
+## Step 13 — Routes
+
+**File:** `routes/web.php`
+
+| Method | URL | Name | What it does |
+|---|---|---|---|
+| GET | `/` | — | Redirects to dashboard |
+| GET | `/import` | `import.create` | Shows upload form |
+| POST | `/import` | `import.store` | Handles CSV upload |
+| GET | `/dashboard` | `dashboard.index` | Shows dashboard |
+| GET | `/api/batches/{batch}/status` | `api.batch.status` | JSON polling endpoint |
+
+Named routes (the strings after `->name(...)`) mean views can use
+`route('dashboard.index')` instead of hardcoding `/dashboard` — if the URL
+ever changes, only one place needs updating.
+
+---
+
+## Step 14 — Blade Layout
+
+**File:** `resources/views/layouts/app.blade.php`
+
+**What it does:**
+The shared "shell" that wraps every page. Contains the `<head>`, navigation
+bar, flash message display, and a `@yield('content')` placeholder where each
+page's unique content slots in.
+
+**`@vite([...])`** — tells Laravel to load the Tailwind CSS and JS through
+Vite (the build tool). In development Vite serves them live with hot-reload;
+in production they're compiled into minified files.
+
+**Flash messages** — `session('success')` shows a green banner after a
+redirect (e.g. after a successful upload). `$errors->any()` shows a red
+banner for validation failures.
+
+---
+
+## Step 15 — Upload Form View
+
+**File:** `resources/views/import/create.blade.php`
+
+**What it does:**
+A single-page upload form. Key things:
+
+- `@csrf` — a hidden security token Laravel requires on every POST form.
+  Without it, the request is rejected. It prevents "cross-site request
+  forgery" attacks where another website tricks a logged-in user into
+  submitting a form they didn't intend to.
+- `enctype="multipart/form-data"` — required on any form that uploads a file.
+  Without it, the file contents never reach the server.
+- The JavaScript `onchange` handler updates the label to show the chosen
+  filename instead of "Click to choose a file".
+- A format hint box shows the exact CSV structure expected, so users know
+  how to prepare their file.
+
+---
+
+## Step 16 — Dashboard View + Status Badge Partial
+
+**Files:**
+- `resources/views/dashboard/index.blade.php`
+- `resources/views/dashboard/_status_badge.blade.php`
+
+**What it does:**
+Shows one card per ImportBatch. Each card has:
+- A header with filename, time ago, progress fraction, and overall batch status
+- A thin progress bar that fills as jobs complete
+- A table of every order with its ref, customer, calculated total, and status badge
+
+**The `_status_badge` partial** is a small reusable snippet included in
+multiple places. It maps a status string (`pending`, `processing`, etc.) to
+the right coloured badge. The underscore prefix is a convention meaning
+"this is a partial, not a full page".
+
+**How live updates work (the polling script):**
+- `setInterval(..., 4000)` — runs a function every 4 seconds
+- It finds all batch cards whose status isn't finished yet
+- For each active batch, it calls `fetch(pollUrl)` to hit the JSON endpoint
+- When the response comes back, it uses `replaceChildren()` to swap the
+  badge elements in place — no page reload needed
+- Once a batch reaches `completed`, `failed`, or `partial`, the card is
+  excluded from future polls automatically
+
+---
+
 ## Next steps (planned)
-- [ ] ImportController — handles CSV upload form
-- [ ] DashboardController — shows batch/order statuses
-- [ ] Routes
-- [ ] Blade views (upload form + dashboard)
-- [ ] Horizon configuration
+- [ ] Run migrations and test the full flow locally
+- [ ] Configure Redis queue driver and Horizon
+- [ ] Horizon dashboard setup
