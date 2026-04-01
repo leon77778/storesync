@@ -7,6 +7,7 @@ use App\Models\ImportBatch;
 use App\Models\Order;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 
 class ImportController extends Controller
@@ -49,8 +50,9 @@ class ImportController extends Controller
         $path     = $file->storeAs('imports', $filename);
 
         // Step 3 — open the CSV and read all rows into an array.
-        // fgetcsv reads one comma-separated line at a time.
-        $fullPath = storage_path("app/{$path}");
+        // Storage::path() gives the correct absolute path regardless of OS,
+        // avoiding Windows backslash/forward-slash issues with manual string building.
+        $fullPath = Storage::path($path);
         $handle   = fopen($fullPath, 'r');
 
         if ($handle === false) {
