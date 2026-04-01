@@ -9,7 +9,10 @@
 - README.md (project overview)
 - CLAUDE.md (context file for Claude Code)
 - Two database migrations
-- Two Eloquent models
+- Two Eloquent models (ImportBatch, Order)
+- ProcessOrderJob (background worker)
+- OrderConfirmationMail (email class)
+- Email Blade view
 - This transcript
 
 ---
@@ -135,9 +138,87 @@ The PHP class that represents one row in the `orders` table (one CSV order).
 
 ---
 
+---
+
+## Step 8 — ProcessOrderJob
+
+**File:** `app/Jobs/ProcessOrderJob.php`
+
+**What it does:**
+This is the background worker — the thing that actually processes each order
+after it's been dispatched from the CSV upload. Laravel puts it in a queue
+(a waiting list) and a worker process picks it up and runs it.
+
+**The lifecycle of one job:**
+1. Job is dispatched → status set to `processing`
+2. Validates the order data (name, email, line items all present and valid)
+3. Calculates subtotal, 20% VAT, and total — stored as pence
+4. Sends a confirmation email to the customer
+5. Marks the order `completed`, updates the batch counters
+
+**Key concepts explained:**
+
+**`implements ShouldQueue`** — This tells Laravel "don't run this now, put it
+in the queue." Without this interface, the job would run immediately and slow
+down the upload request.
+
+**`$tries = 3` and `$backoff = [10, 60, 300]`** — If the job throws an error,
+Laravel retries it. First retry after 10 seconds, second after 60, third after
+5 minutes. This handles temporary issues like a mail server being briefly down.
+
+**`SerializesModels`** — When the job goes into the queue, Laravel can't store
+the whole Order object. This trait converts it to just the ID, then fetches a
+fresh copy from the database when the job runs. Prevents stale data.
+
+**`failed()` method** — After all retries are exhausted, Laravel calls this.
+We store the error message on the order (visible in the dashboard) and update
+the batch counters so the overall status stays accurate.
+
+**Why `intval(round(floatval($item['unit_price']) * 100))`?**
+CSV prices are strings like `"9.99"`. `floatval` converts to a float, multiply
+by 100 gives `999.0`, `round` ensures no floating-point drift, `intval` makes
+it a whole integer. Result: 999 pence.
+
+---
+
+## Step 9 — OrderConfirmationMail
+
+**File:** `app/Mail/OrderConfirmationMail.php`
+
+**What it does:**
+A Laravel Mailable — a class that represents one email. Think of it as a
+"letter template" that knows: who to send to, what the subject is, and which
+view to use for the body.
+
+**Key parts:**
+- `envelope()` — sets the subject line the customer sees in their inbox
+- `content()` — points to the Blade view that contains the email HTML
+- The `$order` property is `public`, which means Laravel automatically passes
+  it to the Blade view — no extra code needed
+
+---
+
+## Step 10 — Email Blade View
+
+**File:** `resources/views/emails/order-confirmation.blade.php`
+
+**What it does:**
+The HTML template for the customer confirmation email. Shows their name,
+order reference, a line-items table with quantities and prices, and the
+totals (subtotal, VAT, total).
+
+**Why plain inline CSS (not Tailwind)?**
+Email clients (Gmail, Outlook) strip out external stylesheets and don't
+support modern CSS. Inline styles are the only reliable way to style emails.
+Tailwind classes wouldn't work here.
+
+**The line total calculation** happens in the template using `@php` blocks
+because the database only stores `unit_price` and `qty` per item — the line
+total is derived, not stored.
+
+---
+
 ## Next steps (planned)
-- [ ] ProcessOrderJob — validates data, calculates totals, sends email, updates status
-- [ ] OrderConfirmationMailable — the email sent to the customer
 - [ ] ImportController — handles CSV upload form
 - [ ] DashboardController — shows batch/order statuses
 - [ ] Routes
