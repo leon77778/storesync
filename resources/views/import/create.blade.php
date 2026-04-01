@@ -57,11 +57,10 @@
         <div class="bg-gray-50 rounded-lg p-4 text-xs text-gray-600 space-y-1">
             <p class="font-semibold text-gray-700 mb-2">Expected CSV format:</p>
             <p class="font-mono bg-white border border-gray-200 rounded px-2 py-1 text-gray-800 overflow-x-auto whitespace-nowrap">
-                order_ref, customer_name, customer_email, item1, item2, ...
+                order_ref, customer_name, customer_email, product_name, quantity, unit_price
             </p>
-            <p class="mt-2">Items use the format <span class="font-mono bg-white border border-gray-200 rounded px-1">Name:qty:unit_price</span></p>
-            <p class="font-mono bg-white border border-gray-200 rounded px-2 py-1 text-gray-800 mt-1 overflow-x-auto whitespace-nowrap">
-                ORD-001, Jane Smith, jane@example.com, Blue Widget:2:9.99, Red Widget:1:14.99
+            <p class="font-mono bg-white border border-gray-200 rounded px-2 py-1 text-gray-800 mt-2 overflow-x-auto whitespace-nowrap">
+                ORD-001, Jane Smith, jane@example.com, Blue Widget, 2, 9.99
             </p>
         </div>
 

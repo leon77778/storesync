@@ -98,18 +98,40 @@ class ImportController extends Controller
             $customerName  = trim($row[1] ?? '');
             $customerEmail = trim($row[2] ?? '');
 
-            // Columns from index 3 onward are line items.
-            // Expected format per cell: "Product Name:qty:unit_price"
-            // e.g. "Blue Widget:2:9.99"
+            // Build line items from the CSV columns.
+            //
+            // Supports two formats automatically:
+            //
+            // Format A — separate columns (standard):
+            //   col 3 = product_name, col 4 = quantity, col 5 = unit_price
+            //   e.g. "Running Shoes", "2", "49.99"
+            //
+            // Format B — packed single cell (legacy):
+            //   col 3+ = "Product Name:qty:unit_price"
+            //   e.g. "Running Shoes:2:49.99"
+            //
+            // We detect Format A when column 4 looks like a plain number
+            // (not containing a colon), meaning qty is its own column.
             $lineItems = [];
-            for ($i = 3; $i < count($row); $i++) {
-                $parts = explode(':', trim($row[$i]));
-                if (count($parts) === 3) {
-                    $lineItems[] = [
-                        'name'       => trim($parts[0]),
-                        'qty'        => trim($parts[1]),
-                        'unit_price' => trim($parts[2]),
-                    ];
+
+            if (isset($row[3], $row[4], $row[5]) && ! str_contains($row[3], ':')) {
+                // Format A — product_name, quantity, unit_price are separate columns
+                $lineItems[] = [
+                    'name'       => trim($row[3]),
+                    'qty'        => trim($row[4]),
+                    'unit_price' => trim($row[5]),
+                ];
+            } else {
+                // Format B — packed "Name:qty:price" cells from column 3 onward
+                for ($i = 3; $i < count($row); $i++) {
+                    $parts = explode(':', trim($row[$i]));
+                    if (count($parts) === 3) {
+                        $lineItems[] = [
+                            'name'       => trim($parts[0]),
+                            'qty'        => trim($parts[1]),
+                            'unit_price' => trim($parts[2]),
+                        ];
+                    }
                 }
             }
 
