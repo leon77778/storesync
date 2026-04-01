@@ -351,6 +351,31 @@ the right coloured badge. The underscore prefix is a convention meaning
 
 ---
 
+---
+
+## Bug fixes
+
+### Fix 1 — Windows fopen path error
+**File:** `app/Http/Controllers/ImportController.php`
+Replaced `storage_path("app/{$path}")` with `Storage::path($path)`.
+On Windows, `storeAs()` can return backslash paths, making manual string
+building fail. The Storage facade handles OS path separators correctly.
+
+### Fix 2 — CSV parsing for standard column format
+**File:** `app/Http/Controllers/ImportController.php`
+The original parser expected items packed as `Name:qty:price` in one cell.
+Real-world CSVs use separate columns. The controller now auto-detects which
+format is being used based on whether column 3 contains a colon.
+
+### Fix 3 — Add Items column to dashboard table
+**File:** `resources/views/dashboard/index.blade.php`
+Added an "Items" column between Customer and Email showing each line item
+as `qty × name`, joined by commas (e.g. `2 × Running Shoes`).
+Uses `collect()->map()->join()` — Laravel's collection helpers for
+transforming and joining arrays cleanly in one line.
+
+---
+
 ## Next steps (planned)
 - [ ] Run migrations and test the full flow locally
 - [ ] Configure Redis queue driver and Horizon

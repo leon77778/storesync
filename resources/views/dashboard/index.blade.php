@@ -65,6 +65,7 @@
                 <tr class="text-xs text-gray-400 uppercase tracking-wider border-b border-gray-100">
                     <th class="px-5 py-3 text-left font-medium">Order Ref</th>
                     <th class="px-5 py-3 text-left font-medium">Customer</th>
+                    <th class="px-5 py-3 text-left font-medium">Items</th>
                     <th class="px-5 py-3 text-left font-medium">Email</th>
                     <th class="px-5 py-3 text-right font-medium">Total</th>
                     <th class="px-5 py-3 text-center font-medium">Status</th>
@@ -75,6 +76,11 @@
                 <tr data-order-id="{{ $order->id }}">
                     <td class="px-5 py-3 font-mono text-gray-700">{{ $order->order_ref }}</td>
                     <td class="px-5 py-3 text-gray-800">{{ $order->customer_name }}</td>
+                    <td class="px-5 py-3 text-gray-600">
+                        {{-- line_items is a PHP array thanks to the 'array' cast on the model.
+                             We loop through and show "qty × name" per item, joined by commas. --}}
+                        {{ collect($order->line_items)->map(fn($i) => $i['qty'] . ' × ' . $i['name'])->join(', ') }}
+                    </td>
                     <td class="px-5 py-3 text-gray-500">{{ $order->customer_email }}</td>
                     <td class="px-5 py-3 text-right font-medium text-gray-800 order-total">
                         {{ $order->formattedTotal() ?: '—' }}
