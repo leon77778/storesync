@@ -408,6 +408,38 @@ transforming and joining arrays cleanly in one line.
 
 ---
 
+### Fix 5 — Revert MAIL_MAILER to log driver for development
+**File:** `.env` (not committed — lives outside git)
+
+`MAIL_MAILER` was briefly set to `smtp` with Mailtrap credentials,
+then reverted to `log`.
+
+**Why `log` is better during development:**
+
+- **No external dependency.** The `smtp` driver requires a network connection
+  and a running mail server (even Mailtrap). If you're offline or Mailtrap is
+  down, every job that tries to send an email will fail and retry — burning
+  through your `$tries` attempts for a non-code reason.
+
+- **Instant, zero-setup inspection.** With `log`, Laravel writes the full
+  email content (headers, subject, body HTML) to `storage/logs/laravel.log`.
+  You can read it immediately with no inbox, no login, no waiting.
+
+- **No accidental sends.** With `smtp` pointing at a sandbox, it's easy to
+  accidentally switch to a real SMTP host during testing. `log` makes it
+  impossible to send real emails — the email never leaves the machine.
+
+- **Faster jobs.** No TCP handshake or SMTP negotiation. The job writes to
+  a local file and finishes in milliseconds.
+
+**When to switch to Mailtrap:**
+Only when you specifically want to test the email HTML layout in an inbox.
+Switch `MAIL_MAILER=smtp` temporarily, test, then switch back to `log`.
+The Mailtrap credentials are kept in `.env` (which is gitignored) so they're
+ready to use without being exposed in the repository.
+
+---
+
 ## Next steps (planned)
 - [ ] Run migrations and test the full flow locally
 - [ ] Configure Redis queue driver and Horizon
