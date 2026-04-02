@@ -367,6 +367,38 @@ The original parser expected items packed as `Name:qty:price` in one cell.
 Real-world CSVs use separate columns. The controller now auto-detects which
 format is being used based on whether column 3 contains a colon.
 
+### Fix 4 — Flexible CSV header validation with clear error messages
+**File:** `app/Http/Controllers/ImportController.php`
+
+**Problem:** The controller previously read columns by fixed position (column 0,
+1, 2…) and silently failed or produced garbage data when headers didn't match
+exactly. A CSV with `"Email"` instead of `"customer_email"` would silently
+map the wrong data.
+
+**Change 1 — Normalisation:**
+Every header cell is normalised before any comparison:
+`strtolower(preg_replace('/[\s_\-]+/', '', $col))`
+This strips spaces, underscores, and hyphens, then lowercases everything.
+So `"Customer Email"`, `"customer_email"`, `"CUSTOMER-EMAIL"` all become
+`"customeremail"` — and all match the same alias.
+
+**Change 2 — Alias table (`COLUMN_ALIASES`):**
+A constant maps each internal column name to every reasonable variation
+a user might write. For example `customer_email` accepts: `email`,
+`customer email`, `email_address`, etc. New aliases can be added in one place
+without touching any other logic.
+
+**Change 3 — `resolveColumnMap()`:**
+A private method loops through the normalised headers and checks each one
+against the alias lists. Returns a map of `internal_name → column index`
+(e.g. `['order_ref' => 0, 'customer_email' => 2]`). Data rows are then
+read by looking up the index from this map, not hardcoded positions.
+
+**Change 4 — Missing column error:**
+After building the map, we check which required columns are still absent.
+If any are missing the user sees exactly which ones:
+`"Missing required columns: quantity, unit_price"` — not a generic 500 error.
+
 ### Fix 3 — Add Items column to dashboard table
 **File:** `resources/views/dashboard/index.blade.php`
 Added an "Items" column between Customer and Email showing each line item

@@ -13,6 +13,24 @@ use Illuminate\View\View;
 class ImportController extends Controller
 {
     /**
+     * The canonical column names we require, and every variation we'll accept.
+     *
+     * Keys   = the internal name used in code.
+     * Values = all header strings that should map to that internal name.
+     *          Comparison is case-insensitive and ignores spaces/underscores/hyphens.
+     */
+    private const COLUMN_ALIASES = [
+        'order_ref'      => ['order_ref', 'orderref', 'order ref', 'order-ref', 'ref', 'order_number', 'ordernumber', 'order number'],
+        'customer_name'  => ['customer_name', 'customername', 'customer name', 'customer-name', 'name', 'full_name', 'fullname'],
+        'customer_email' => ['customer_email', 'customeremail', 'customer email', 'customer-email', 'email', 'email_address', 'emailaddress'],
+        'product_name'   => ['product_name', 'productname', 'product name', 'product-name', 'product', 'item', 'item_name', 'itemname'],
+        'quantity'       => ['quantity', 'qty', 'amount', 'count'],
+        'unit_price'     => ['unit_price', 'unitprice', 'unit price', 'unit-price', 'price', 'cost', 'unit_cost'],
+    ];
+
+    // -------------------------------------------------------------------------
+
+    /**
      * Show the CSV upload form.
      * GET /import
      */
@@ -24,34 +42,20 @@ class ImportController extends Controller
     /**
      * Handle the uploaded CSV file.
      * POST /import
-     *
-     * Steps:
-     *  1. Validate the uploaded file
-     *  2. Create an ImportBatch record (the "folder" for this upload)
-     *  3. Parse the CSV row by row
-     *  4. Create one Order record per row
-     *  5. Dispatch one ProcessOrderJob per order
-     *  6. Redirect to the dashboard
      */
     public function store(Request $request): RedirectResponse
     {
-        // Step 1 — validate the upload.
-        // 'file' means it must be a real file upload (not a string).
-        // 'mimes:csv,txt' allows both .csv and plain-text CSV files.
-        // 'max:2048' limits to 2MB — prevents huge files locking up the server.
+        // --- File-level validation -------------------------------------------
+        // Checks the upload exists, is a real file, is CSV/txt, and under 2MB.
         $request->validate([
             'csv_file' => ['required', 'file', 'mimes:csv,txt', 'max:2048'],
         ]);
 
-        // Step 2 — store the uploaded file in storage/app/imports temporarily
-        // so we can read it. getClientOriginalName() gives us the original filename.
         $file     = $request->file('csv_file');
         $filename = $file->getClientOriginalName();
         $path     = $file->storeAs('imports', $filename);
 
-        // Step 3 — open the CSV and read all rows into an array.
-        // Storage::path() gives the correct absolute path regardless of OS,
-        // avoiding Windows backslash/forward-slash issues with manual string building.
+        // Open the file — Storage::path() handles Windows/Linux path differences.
         $fullPath = Storage::path($path);
         $handle   = fopen($fullPath, 'r');
 
@@ -59,21 +63,44 @@ class ImportController extends Controller
             return back()->withErrors(['csv_file' => 'Could not read the uploaded file.']);
         }
 
-        // Read and discard the header row (first line).
-        // We assume the CSV always has: order_ref, customer_name, customer_email,
-        // then one or more item columns. The exact item structure is handled below.
-        $header = fgetcsv($handle);
+        // --- Header validation -----------------------------------------------
+        $rawHeader = fgetcsv($handle);
 
-        if ($header === false || count($header) < 3) {
+        if ($rawHeader === false) {
             fclose($handle);
-            return back()->withErrors(['csv_file' => 'CSV must have at least 3 columns: order_ref, customer_name, customer_email.']);
+            return back()->withErrors(['csv_file' => 'The file appears to be empty.']);
         }
 
-        // Collect all data rows first so we know the total count
+        // Normalise every header cell: lowercase, strip spaces/underscores/hyphens.
+        // "Customer Email", "customer_email", "CUSTOMER-EMAIL" all become "customeremail".
+        // This lets us match regardless of how the user formatted their headers.
+        $normalisedHeader = array_map(
+            fn(string $col): string => strtolower(preg_replace('/[\s_\-]+/', '', $col)),
+            $rawHeader
+        );
+
+        // Build a map of internal_name → column index by checking each header
+        // cell against our alias lists.
+        $columnMap = $this->resolveColumnMap($normalisedHeader);
+
+        // Check which required columns are still missing after alias resolution.
+        $required = ['order_ref', 'customer_name', 'customer_email', 'product_name', 'quantity', 'unit_price'];
+        $missing  = array_filter($required, fn($col) => ! isset($columnMap[$col]));
+
+        if (! empty($missing)) {
+            fclose($handle);
+            // Tell the user exactly which columns are missing so they can fix their CSV.
+            return back()->withErrors([
+                'csv_file' => 'Missing required columns: ' . implode(', ', $missing) . '. '
+                            . 'Check your header row — column names are flexible but must be recognisable '
+                            . '(e.g. "email", "Email", "customer_email" all work for the email column).',
+            ]);
+        }
+
+        // --- Read data rows --------------------------------------------------
         $rows = [];
         while (($row = fgetcsv($handle)) !== false) {
-            // Skip blank lines
-            if (array_filter($row)) {
+            if (array_filter($row)) { // skip blank lines
                 $rows[] = $row;
             }
         }
@@ -83,60 +110,26 @@ class ImportController extends Controller
             return back()->withErrors(['csv_file' => 'The CSV file contains no data rows.']);
         }
 
-        // Step 4 — create the ImportBatch now that we know total_rows.
+        // --- Create batch and dispatch jobs ----------------------------------
         $batch = ImportBatch::create([
             'filename'   => $filename,
             'total_rows' => count($rows),
             'status'     => 'pending',
         ]);
 
-        // Step 5 — loop through every row, create an Order, dispatch a job.
         foreach ($rows as $row) {
-            // Map positional CSV columns to named values.
-            // We use null coalescing (?? '') so missing columns don't crash.
-            $orderRef      = trim($row[0] ?? '');
-            $customerName  = trim($row[1] ?? '');
-            $customerEmail = trim($row[2] ?? '');
+            // Read each value by looking up its resolved column index.
+            // If a column is somehow absent in a data row, default to ''.
+            $orderRef      = trim($row[$columnMap['order_ref']]      ?? '');
+            $customerName  = trim($row[$columnMap['customer_name']]  ?? '');
+            $customerEmail = trim($row[$columnMap['customer_email']] ?? '');
 
-            // Build line items from the CSV columns.
-            //
-            // Supports two formats automatically:
-            //
-            // Format A — separate columns (standard):
-            //   col 3 = product_name, col 4 = quantity, col 5 = unit_price
-            //   e.g. "Running Shoes", "2", "49.99"
-            //
-            // Format B — packed single cell (legacy):
-            //   col 3+ = "Product Name:qty:unit_price"
-            //   e.g. "Running Shoes:2:49.99"
-            //
-            // We detect Format A when column 4 looks like a plain number
-            // (not containing a colon), meaning qty is its own column.
-            $lineItems = [];
+            $lineItems = [[
+                'name'       => trim($row[$columnMap['product_name']] ?? ''),
+                'qty'        => trim($row[$columnMap['quantity']]     ?? ''),
+                'unit_price' => trim($row[$columnMap['unit_price']]   ?? ''),
+            ]];
 
-            if (isset($row[3], $row[4], $row[5]) && ! str_contains($row[3], ':')) {
-                // Format A — product_name, quantity, unit_price are separate columns
-                $lineItems[] = [
-                    'name'       => trim($row[3]),
-                    'qty'        => trim($row[4]),
-                    'unit_price' => trim($row[5]),
-                ];
-            } else {
-                // Format B — packed "Name:qty:price" cells from column 3 onward
-                for ($i = 3; $i < count($row); $i++) {
-                    $parts = explode(':', trim($row[$i]));
-                    if (count($parts) === 3) {
-                        $lineItems[] = [
-                            'name'       => trim($parts[0]),
-                            'qty'        => trim($parts[1]),
-                            'unit_price' => trim($parts[2]),
-                        ];
-                    }
-                }
-            }
-
-            // Create the Order record with status 'pending'.
-            // Totals start at 0 — the job will calculate and fill them in.
             $order = Order::create([
                 'import_batch_id' => $batch->id,
                 'order_ref'       => $orderRef,
@@ -146,14 +139,40 @@ class ImportController extends Controller
                 'status'          => 'pending',
             ]);
 
-            // Dispatch the background job for this order.
-            // dispatch() puts it on the queue — it doesn't run right now.
             ProcessOrderJob::dispatch($order);
         }
 
-        // Step 6 — redirect to the dashboard with a success flash message.
         return redirect()
             ->route('dashboard.index')
             ->with('success', "Imported {$batch->total_rows} orders from \"{$filename}\". Jobs are processing in the background.");
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Given a normalised header row, return a map of internal_name → column index.
+     *
+     * For each column in the CSV header we check it against every alias list.
+     * The first match wins. Unrecognised columns are simply ignored.
+     *
+     * @param  array<int, string> $normalisedHeader
+     * @return array<string, int>  e.g. ['order_ref' => 0, 'customer_email' => 2, ...]
+     */
+    private function resolveColumnMap(array $normalisedHeader): array
+    {
+        $map = [];
+
+        foreach ($normalisedHeader as $index => $normalisedValue) {
+            foreach (self::COLUMN_ALIASES as $internalName => $aliases) {
+                if (in_array($normalisedValue, $aliases, strict: true) && ! isset($map[$internalName])) {
+                    $map[$internalName] = $index;
+                    break; // move on to the next header column
+                }
+            }
+        }
+
+        return $map;
     }
 }
